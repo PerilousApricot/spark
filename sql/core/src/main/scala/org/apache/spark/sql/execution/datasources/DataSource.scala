@@ -602,6 +602,28 @@ object DataSource extends Logging {
   }
 
   /**
+   * Returns an optional [[DataSourceV2]] instance for the given provider
+   * registered via [[DataSourceRegisterV2]].
+   */
+  def lookupDataSourceViaRegistrationV2(provider: String, conf: SQLConf): Class[_] = {
+    val loader = Utils.getContextOrSparkClassLoader
+    val serviceLoader = ServiceLoader.load(classOf[DataSourceRegisterV2], loader)
+    serviceLoader.asScala.filter(_.shortName().equalsIgnoreCase(provider)).toList match {
+      case Nil =>
+        null
+      // the provider format did not match any given registered aliases
+      case head :: Nil =>
+        // there is exactly one registered alias
+        head.getImplementation()
+      case sources =>
+        // There are multiple registered aliases for the input
+        val sourceNames = sources.map(_.getClass.getName)
+        throw new AnalysisException(s"Multiple sources found for $provider " +
+          s"(${sourceNames.mkString(", ")}), please specify the fully qualified class name.")
+    }
+  }
+
+  /**
    * Class that were removed in Spark 2.0. Used to detect incompatibility libraries for Spark 2.0.
    */
   private val spark2RemovedClasses = Set(
@@ -624,6 +646,15 @@ object DataSource extends Logging {
     }
     val provider2 = s"$provider1.DefaultSource"
     val loader = Utils.getContextOrSparkClassLoader
+
+    /*
+     * Short circuit if the source is registered with DataSourceRegistrationV2, to prevent
+     * adding another layer of indentation in the subsequent block
+     */
+    val sourceRegisteredWithV2 = lookupDataSourceViaRegistrationV2(provider1, conf)
+    if (sourceRegisteredWithV2 != null) {
+      return sourceRegisteredWithV2
+    }
     val serviceLoader = ServiceLoader.load(classOf[DataSourceRegister], loader)
 
     try {
